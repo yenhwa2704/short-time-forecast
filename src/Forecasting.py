@@ -14,21 +14,30 @@ from sktime.forecasting.ets import AutoETS
 from statsmodels.tsa.exponential_smoothing.ets import ETSModel
 
 
-def Triang_CDF(val, par):
-    a, c, b = par
-    result = 0
-    if val < a: result = 0
-    elif a <= val < c:
-        result = (val - a) ** 2 / ((b - a) * (c - a))
-    elif c <= val <= b:
-        result = 1 - (b - val) ** 2 / ((b - a) * (b - c))
-    else: result = 1
+def triang_cdf(x, params):
+    """
+    Compute the cumulative distribution function (CDF) of a triangular distribution.
 
-    return result
+    Parameters:
+        x (float): The value at which to evaluate the CDF.
+        params (list or tuple): The parameters of the triangular distribution (a, c, b),
+                                where a is the lower limit, c is the mode, and b is the upper limit.
+
+    Returns:
+        float: The CDF value at x.
+    """
+    a, c, b = params
+    if x < a:
+        return 0.0
+    elif a <= x < c:
+        return ((x - a) ** 2) / ((b - a) * (c - a))
+    elif c <= x <= b:
+        return 1.0 - ((b - x) ** 2) / ((b - a) * (b - c))
+    else:
+        return 1.0
 
 
 class ForecastMethods:
-
     # ====================model function====================
     #  required input: trains (pd.Series) -> training data, h (int) -> forecasting lengths
     #  output: pd.Series -> forecasting results (length=h)
@@ -38,10 +47,9 @@ class ForecastMethods:
     def __init__(self, trains: pd.Series, h: int = 5):
         self.trains = trains
         self.h = h
-        self.ahead_idx = pd.date_range('2022-01-01', '2022-06-01', freq='m')
+        self.ahead_idx = pd.date_range('2022-01-01', periods=h, freq='M')
 
     def RunAll(self):  # run all forecasting methods, return a dataframe -> shape: (h, num(methods))
-
         frct_df = pd.DataFrame([], index=self.ahead_idx)
         # simple methods
         frct_df['NAIVE'] = self.NAIVE()
@@ -72,17 +80,17 @@ class ForecastMethods:
 
     # ==================simple methods==================
     def NAIVE(self):
-        return pd.Series([self.trains[-1]] * self.h, self.ahead_idx)
+        return pd.Series([self.trains.iloc[-1]] * self.h, index=self.ahead_idx)
 
     def AVG(self):
         return pd.Series([self.trains.mean()] * self.h, index=self.ahead_idx)
 
-    def SNAIVE(self, season_length=12, frequency='m', n_job=1):
+    def SNAIVE(self, season_length=12, frequency='M', n_job=1):
         train_data = self.trains.copy()
         train_data = pd.DataFrame(train_data).reset_index()
         train_data.columns = ['ds', 'y']
-        train_data.index = [0] * len(train_data)
-        train_data.index.name = 'unique_id'
+        train_data['unique_id'] = 0
+        train_data = train_data[['unique_id', 'ds', 'y']]
 
         fcst = StatsForecast(
             train_data,
@@ -91,19 +99,18 @@ class ForecastMethods:
             n_jobs=n_job
         )
         prediction = fcst.forecast(h=self.h)
-        prediction.columns = ['Date', 'y']
-        prediction = prediction.set_index('Date')['y']
+        prediction = prediction.set_index('ds')['y']
+        prediction.index = self.ahead_idx
         return prediction
-
     # ==================simple methods==================
 
     # ==================traditional methods==================
-    def ARIMA(self, season_length=12, frequency='m', n_job=1):
+    def ARIMA(self, season_length=12, frequency='M', n_job=1):
         train_data = self.trains.copy()
         train_data = pd.DataFrame(train_data).reset_index()
         train_data.columns = ['ds', 'y']
-        train_data.index = [0] * len(train_data)
-        train_data.index.name = 'unique_id'
+        train_data['unique_id'] = 0
+        train_data = train_data[['unique_id', 'ds', 'y']]
 
         fcst = StatsForecast(
             train_data,
@@ -112,87 +119,62 @@ class ForecastMethods:
             n_jobs=n_job
         )
         prediction = fcst.forecast(self.h)
-        prediction.columns = ['Date', 'y']
-        prediction = prediction.set_index('Date')['y']
+        prediction = prediction.set_index('ds')['y']
+        prediction.index = self.ahead_idx
         return prediction
 
     def ETS(self):
         train_data = self.trains.copy()
         train_data.index = range(0, len(train_data))
         try:
-            # auto_ets = AutoETS(auto=True, information_criterion='aicc', sp=12).fit(y=train_data)
             auto_ets = AutoETS(auto=True, sp=12).fit(y=train_data)
             prdct = auto_ets.predict(list(range(0, self.h)))
-        except:
+        except Exception:
             prdct = self.AVG()
-            print(train_data.name, "failed to predict with ETS, use AVG.")
+            print(getattr(train_data, 'name', ''), "failed to predict with ETS, use AVG.")
         prdct.index = self.ahead_idx
-        # ets = ETSModel(trains).fit()
-        # pred = ets.forecast(h)
         return prdct
 
     def ETS_manual(self):
         train_data = self.trains.copy()
-
         aaa = ETSModel(train_data, error='add', trend='add', seasonal='add', seasonal_periods=12).fit()
         aan = ETSModel(train_data, error='add', trend='add', seasonal=None).fit()
         ana = ETSModel(train_data, error='add', trend=None, seasonal='add', seasonal_periods=12).fit()
-        if aaa.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-            pred = aaa.forecast(self.h)
-        elif aan.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-            pred = aan.forecast(self.h)
-        elif ana.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-            pred = ana.forecast(self.h)
-        else:
-            pred = ETSModel(train_data).fit().forecast(self.h)
-
-        # pred = ets.forecast(h)
+        aiccs = [aaa.aicc, aan.aicc, ana.aicc]
+        min_idx = np.argmin(aiccs)
+        pred = [aaa, aan, ana][min_idx].forecast(self.h)
         return pred
 
     def SES(self):
         train_data = self.trains.copy()
-
-        # aaa = ETSModel(train_data, error='add', trend='add', seasonal='add', seasonal_periods=12).fit()
         aan = ETSModel(train_data, error='add', trend='add', seasonal=None).fit()
-        # ana = ETSModel(train_data, error='add', trend=None, seasonal='add', seasonal_periods=12).fit()
-        # if aaa.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-        #     pred = aaa.forecast(self.h)
-        # elif aan.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-        #     pred = aan.forecast(self.h)
-        # elif ana.aicc == min(aaa.aicc, aan.aicc, ana.aicc):
-        #     pred = ana.forecast(self.h)
-        # else:
-        #     pred = ETSModel(train_data).fit().forecast(self.h)
-
         pred = aan.forecast(self.h)
+        pred.index = self.ahead_idx
         return pred
 
     # ==================traditional methods==================
 
     # ==================STS: Grey Models==================
     def GM11(self):
-        cum_series = self.trains.cumsum()  # cummulative sum
-        near_mean = list(((cum_series.shift(-1) + cum_series) / 2)[:-1])  # avg with the nearest value
-        Y = np.mat(list(self.trains[:-1])).T  # copy the training set
+        cum_series = self.trains.cumsum()
+        near_mean = list(((cum_series.shift(-1) + cum_series) / 2)[:-1])
+        Y = np.mat(list(self.trains[:-1])).T
         B = [-near_mean[i] for i in range(len(near_mean))]
-        B = np.mat([B, np.ones(len(B))]).T  # create matrix
+        B = np.mat([B, np.ones(len(B))]).T
         beta = np.linalg.inv(B.T.dot(B)).dot(B.T).dot(Y)
         beta = np.array(beta).reshape(2)
         const = beta[1] / beta[0]
-        first_val = self.trains[0]
-        frct = [first_val] + [(first_val - const) * math.exp(-beta[0] * k) + const for k in
-                              range(1, len(self.trains) + self.h)]
+        first_val = self.trains.iloc[0]
+        frct = [first_val] + [(first_val - const) * math.exp(-beta[0] * k) + const for k in range(1, len(self.trains) + self.h)]
         origin_prct = [first_val] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-
         return pd.Series(origin_prct[-self.h:], self.ahead_idx)
 
     def BGM11(self):
-        cum_series = self.trains.cumsum()  # cummulative sum
+        cum_series = self.trains.cumsum()
         Y = np.mat(list(self.trains[:-1])).T
-        # main difference to GM(1, 1) -> use different way to calculate background value
         Q1, Q2, Q3 = self.trains.quantile(0.25), self.trains.median(), self.trains.quantile(0.75)
-        LL = Q1 - 1.5 * (Q3 - Q1) if Q1 - 1.5 * (Q3 - Q1) < self.trains.min() else self.trains.min()
-        UL = Q3 + 1.5 * (Q3 - Q1) if Q3 + 1.5 * (Q3 - Q1) > self.trains.max() else self.trains.max()
+        LL = min(Q1 - 1.5 * (Q3 - Q1), self.trains.min())
+        UL = max(Q3 + 1.5 * (Q3 - Q1), self.trains.max())
         MF = []
         for i in self.trains:
             if i == Q2:
@@ -201,26 +183,23 @@ class ForecastMethods:
                 MF.append((i - LL) / (Q2 - LL))
             else:
                 MF.append((UL - i) / (UL - Q2))
-        bg_value = [cum_series[i - 1] + MF[i] * self.trains[i] for i in range(1, len(MF))]
-        # the codes after this line are the same as GM(1, 1)
+        bg_value = [cum_series.iloc[i - 1] + MF[i] * self.trains.iloc[i] for i in range(1, len(MF))]
         bg_mat = [-bg_value[i] for i in range(len(bg_value))]
         bg_mat = np.mat([bg_mat, np.ones(len(bg_mat))]).T
         beta = np.linalg.inv(bg_mat.T.dot(bg_mat)).dot(bg_mat.T).dot(Y)
         beta = np.array(beta).reshape(2)
         const = beta[1] / beta[0]
-        frct = [self.trains[0]] + [(self.trains[0] - const) * math.exp(-beta[0] * k) + const
-                                   for k in range(1, len(self.trains) + self.h)]
+        frct = [self.trains.iloc[0]] + [(self.trains.iloc[0] - const) * math.exp(-beta[0] * k) + const
+                                        for k in range(1, len(self.trains) + self.h)]
         origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-
         return pd.Series(origin_prct[-self.h:], self.ahead_idx)
 
     def RBGM11(self):
-        cum_series = self.trains.cumsum()  # cummulative sum
+        cum_series = self.trains.cumsum()
         Y = np.mat(list(self.trains[:-1])).T
-        # main difference to GM(1, 1) -> use different way to calculate background value
         Q1, Q2, Q3 = self.trains.quantile(0.25), self.trains.median(), self.trains.quantile(0.75)
-        LL = Q1 - 1.5 * (Q3 - Q1) if Q1 - 1.5 * (Q3 - Q1) > self.trains.min() else self.trains.min()
-        UL = Q3 + 1.5 * (Q3 - Q1) if Q3 + 1.5 * (Q3 - Q1) < self.trains.max() else self.trains.max()
+        LL = max(Q1 - 1.5 * (Q3 - Q1), self.trains.min())
+        UL = min(Q3 + 1.5 * (Q3 - Q1), self.trains.max())
         MF = []
         for i in self.trains:
             if i <= LL or i >= UL:
@@ -231,44 +210,36 @@ class ForecastMethods:
                 MF.append((i - LL) / (Q2 - LL))
             else:
                 MF.append((UL - i) / (UL - Q2))
-        bg_value = [cum_series[i - 1] + MF[i] * self.trains[i] for i in range(1, len(MF))]
-        # the codes after this line are the same as GM(1, 1)
+        bg_value = [cum_series.iloc[i - 1] + MF[i] * self.trains.iloc[i] for i in range(1, len(MF))]
         bg_mat = [-bg_value[i] for i in range(len(bg_value))]
         bg_mat = np.mat([bg_mat, np.ones(len(bg_mat))]).T
         beta = np.linalg.inv(bg_mat.T.dot(bg_mat)).dot(bg_mat.T).dot(Y)
         beta = np.array(beta).reshape(2)
         const = beta[1] / beta[0]
-        frct = [self.trains[0]] + [(self.trains[0] - const) * math.exp(-beta[0] * k) + const
-                                   for k in range(1, len(self.trains) + self.h)]
+        frct = [self.trains.iloc[0]] + [(self.trains.iloc[0] - const) * math.exp(-beta[0] * k) + const
+                                        for k in range(1, len(self.trains) + self.h)]
         origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-
         return pd.Series(origin_prct[-self.h:], self.ahead_idx)
-
-
     # ==================STS: Grey Models==================
 
     # ==================STS: Fuzzy Models==================
     def FTS_Chen(self, m=10):
-        # lb, ub = 13000, 20000
-        # lb, ub = 11274, 20795
         lb, ub = self.trains.min(), self.trains.max()
         his_data = self.trains.to_list()
-        radius = (ub - lb) / (m * 2)  # strip the head and the tail
+        radius = (ub - lb) / (m * 2)
         fuzzy_list = [
             [lb - 1 * radius + 2 * i * radius, lb + 1 * radius + 2 * i * radius, lb + 3 * radius + 2 * i * radius]
             for i in range(m)]
 
-        # assign values into fuzzy sub sets (Chen, 1996)
         location = [-1] * len(his_data)
         for j in range(len(his_data)):
-
             if his_data[j] <= lb:
                 location[j] = 0
             elif his_data[j] >= ub:
                 location[j] = m - 1
             else:
                 for i in range(0, m):
-                    cdf = Triang_CDF(his_data[j], fuzzy_list[i])
+                    cdf = triang_cdf(his_data[j], fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         location[j] = i
                         break
@@ -276,27 +247,28 @@ class ForecastMethods:
         fuzzy_dict = {i: [] for i in range(0, m)}
         for i in range(0, len(his_data) - 1):
             fuzzy_dict[location[i]].append(location[i + 1])
-        # vl = trains[-1]
 
         frct_result = [his_data[0]]
         for current in range(len(his_data) + self.h - 1):
-            if current < len(his_data): vl = his_data[current]  # use historical data
-            else: vl = frct_result[-1]  # use predicted data
-
-            belong = int(m / 2)  # in case that "belong" is not assigned
-            if vl < lb:
-                belong = 0  # case1
-            elif vl > ub:
-                belong = m - 1  # case2
+            if current < len(his_data):
+                vl = his_data[current]
             else:
-                for i in range(0, m):  # general case
-                    cdf = Triang_CDF(vl, fuzzy_list[i])
+                vl = frct_result[-1]
+
+            belong = int(m / 2)
+            if vl < lb:
+                belong = 0
+            elif vl > ub:
+                belong = m - 1
+            else:
+                for i in range(0, m):
+                    cdf = triang_cdf(vl, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         belong = i
-                        break  # found the fuzzy subset
+                        break
             possible = len(set(fuzzy_dict[belong]))
             if possible == 1:
-                frct = fuzzy_list[(fuzzy_dict[belong][0])][1]  # the mid-value of the next possible subset
+                frct = fuzzy_list[(fuzzy_dict[belong][0])][1]
             elif possible == 0:
                 frct = fuzzy_list[belong][1]
             else:
@@ -304,7 +276,6 @@ class ForecastMethods:
                 for j in set(fuzzy_dict[belong]):
                     frct += (fuzzy_list[j][1] / possible)
             frct_result.append(frct)
-            # vl = frct
 
         return pd.Series(frct_result[-self.h:], self.ahead_idx)
 
@@ -312,27 +283,21 @@ class ForecastMethods:
         iqr = self.trains.quantile(.75) - self.trains.quantile(.25)
         lb = self.trains.quantile(.25) - 1.5 * iqr
         ub = self.trains.quantile(.75) + 1.5 * iqr
-        # lb, ub = 11274, 20795
-        # lb, ub = self.trains.min(), self.trains.max()
         his_data = self.trains.to_list()
-        radius = (ub - lb) / (m * 2)  # strip the head and the tail
+        radius = (ub - lb) / (m * 2)
         fuzzy_list = [
             [lb - 1 * radius + 2 * i * radius, lb + 1 * radius + 2 * i * radius, lb + 3 * radius + 2 * i * radius]
             for i in range(m)]
 
-        # assign values into fuzzy sub sets
         location = [-1] * len(his_data)
         for j in range(len(his_data)):
-
             if his_data[j] <= lb:
                 location[j] = 0
-
             elif his_data[j] >= ub:
                 location[j] = m - 1
-
             else:
                 for i in range(0, m):
-                    cdf = Triang_CDF(his_data[j], fuzzy_list[i])
+                    cdf = triang_cdf(his_data[j], fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         location[j] = i
                         break
@@ -340,27 +305,28 @@ class ForecastMethods:
         fuzzy_dict = {i: [] for i in range(0, m)}
         for i in range(0, len(his_data) - 1):
             fuzzy_dict[location[i]].append(location[i + 1])
-        # vl = trains[-1]
 
         frct_result = [his_data[0]]
         for current in range(len(his_data) + self.h - 1):
-            if current < len(his_data): vl = his_data[current]  # use historical data
-            else: vl = frct_result[-1]  # use predicted data
-
-            belong = int(m / 2)  # in case that "belong" is not assigned
-            if vl < lb:
-                belong = 0  # case1
-            elif vl > ub:
-                belong = m - 1  # case2
+            if current < len(his_data):
+                vl = his_data[current]
             else:
-                for i in range(0, m):  # general case
-                    cdf = Triang_CDF(vl, fuzzy_list[i])
+                vl = frct_result[-1]
+
+            belong = int(m / 2)
+            if vl < lb:
+                belong = 0
+            elif vl > ub:
+                belong = m - 1
+            else:
+                for i in range(0, m):
+                    cdf = triang_cdf(vl, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         belong = i
-                        break  # found the fuzzy subset
+                        break
             possible = len(set(fuzzy_dict[belong]))
             if possible == 1:
-                frct = fuzzy_list[(fuzzy_dict[belong][0])][1]  # the mid-value of the next possible subset
+                frct = fuzzy_list[(fuzzy_dict[belong][0])][1]
             elif possible == 0:
                 frct = fuzzy_list[belong][1]
             else:
@@ -368,7 +334,6 @@ class ForecastMethods:
                 for j in set(fuzzy_dict[belong]):
                     frct += (fuzzy_list[j][1] / possible)
             frct_result.append(frct)
-            # vl = frct
 
         return pd.Series(frct_result[-self.h:], self.ahead_idx)
     # ==================STS: Fuzzy Models==================
