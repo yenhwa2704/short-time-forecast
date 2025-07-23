@@ -1,13 +1,12 @@
+import numpy as np
+import pandas as pd
 from src.forecasting import ForecastMethods
 
-def main():
-    # Example: instantiate and use a model from src.Forecasting.models
-    # Replace 'YourModelClass' with the actual model class name
-    model = models.YourModelClass()
-    # Example usage: fit and predict
-    # model.fit(X_train, y_train)
-    # predictions = model.predict(X_test)
-    print("Model initialized:", model)
 
 if __name__ == "__main__":
-    main()
+    df = pd.read_csv('data/NA_removed.csv', index_col=0, parse_dates=True)
+    df.index.name = 'Date'
+    df.index = pd.to_datetime(df.index)
+    total = df['total']
+    predict = ForecastMethods(total, h=5)
+    predict.RunAll()
