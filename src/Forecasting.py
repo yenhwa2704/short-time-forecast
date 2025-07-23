@@ -93,13 +93,12 @@ class ForecastMethods:
         train_data = train_data[['unique_id', 'ds', 'y']]
 
         fcst = StatsForecast(
-            train_data,
-            models=[(SeasonalNaive, season_length)],
+            models=[SeasonalNaive(season_length=season_length)],
             freq=frequency,
             n_jobs=n_job
         )
-        prediction = fcst.forecast(h=self.h)
-        prediction = prediction.set_index('ds')['y']
+        prediction = fcst.forecast(df=train_data, h=self.h)
+        prediction = prediction.set_index('ds')['SeasonalNaive']
         prediction.index = self.ahead_idx
         return prediction
     # ==================simple methods==================
@@ -113,13 +112,12 @@ class ForecastMethods:
         train_data = train_data[['unique_id', 'ds', 'y']]
 
         fcst = StatsForecast(
-            train_data,
-            models=[(AutoARIMA, season_length)],
+            models=[AutoARIMA(season_length)],
             freq=frequency,
             n_jobs=n_job
         )
-        prediction = fcst.forecast(self.h)
-        prediction = prediction.set_index('ds')['y']
+        prediction = fcst.forecast(df=train_data, h=self.h)
+        prediction = prediction.set_index('ds')['AutoARIMA']
         prediction.index = self.ahead_idx
         return prediction
 
