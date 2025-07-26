@@ -255,98 +255,133 @@ class ForecastMethods:
 
     # ==================STS: Grey Models==================
     def GM11(self):
+        """
+        Implements the GM(1,1) Grey Model for time series forecasting.
+
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
         cum_series = self.trains.cumsum()
-        near_mean = list(((cum_series.shift(-1) + cum_series) / 2)[:-1])
-        Y = np.asmatrix(list(self.trains[:-1])).T
-        B = [-near_mean[i] for i in range(len(near_mean))]
-        B = np.mat([B, np.ones(len(B))]).T
-        beta = np.linalg.inv(B.T.dot(B)).dot(B.T).dot(Y)
-        beta = np.array(beta).reshape(2)
-        const = beta[1] / beta[0]
+        # Calculate the mean sequence (background value)
+        near_mean = ((cum_series.shift(-1) + cum_series) / 2)[:-1].to_list()
+        Y = np.asarray(self.trains[:-1]).reshape(-1, 1)
+        B = np.column_stack((-np.array(near_mean), np.ones(len(near_mean))))
+        # Least squares estimation of parameters
+        beta = np.linalg.lstsq(B, Y, rcond=None)[0].flatten()
+        a, b = beta
         first_val = self.trains.iloc[0]
-        frct = [first_val] + [(first_val - const) * math.exp(-beta[0] * k) + const for k in range(1, len(self.trains) + self.h)]
-        origin_prct = [first_val] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-        return pd.Series(origin_prct[-self.h:], self.ahead_idx)
+        # GM(1,1) model formula
+        frct = [first_val]
+        for k in range(1, len(self.trains) + self.h):
+            frct.append((first_val - b / a) * np.exp(-a * k) + b / a)
+        # Restore to original series
+        origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(frct))]
+        return pd.Series(origin_prct[-self.h:], index=self.ahead_idx)
+
+    def _fuzzy_membership(self, values, robust=False):
+        """
+        Compute fuzzy membership values for a series.
+        If robust=True, outliers are assigned membership 0.
+        """
+        Q1 = values.quantile(0.25)
+        Q2 = values.median()
+        Q3 = values.quantile(0.75)
+        if robust:
+            LL = max(Q1 - 1.5 * (Q3 - Q1), values.min())
+            UL = min(Q3 + 1.5 * (Q3 - Q1), values.max())
+        else:
+            LL = min(Q1 - 1.5 * (Q3 - Q1), values.min())
+            UL = max(Q3 + 1.5 * (Q3 - Q1), values.max())
+        MF = []
+        for val in values:
+            if robust and (val <= LL or val >= UL):
+                MF.append(0)
+            elif val == Q2:
+                MF.append(1)
+            elif val < Q2:
+                MF.append((val - LL) / (Q2 - LL) if Q2 != LL else 0)
+            else:
+                MF.append((UL - val) / (UL - Q2) if UL != Q2 else 0)
+        return MF, LL, UL, Q2
+
+    def _GM_fuzzy(self, robust=False):
+        """
+        Generalized fuzzy GM(1,1) model for both BGM11 and RBGM11.
+        """
+        cum_series = self.trains.cumsum()
+        Y = np.asarray(self.trains[:-1]).reshape(-1, 1)
+        MF, LL, UL, Q2 = self._fuzzy_membership(self.trains, robust=robust)
+        bg_value = [
+            cum_series.iloc[i - 1] + MF[i] * self.trains.iloc[i]
+            for i in range(1, len(MF))
+        ]
+        bg_mat = np.column_stack((-np.array(bg_value), np.ones(len(bg_value))))
+        beta = np.linalg.lstsq(bg_mat, Y, rcond=None)[0].flatten()
+        a, b = beta
+        const = b / a if a != 0 else 0
+        first_val = self.trains.iloc[0]
+        frct = [first_val]
+        for k in range(1, len(self.trains) + self.h):
+            frct.append((first_val - const) * math.exp(-a * k) + const)
+        origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(frct))]
+        return pd.Series(origin_prct[-self.h:], index=self.ahead_idx)
 
     def BGM11(self):
-        cum_series = self.trains.cumsum()
-        Y = np.mat(list(self.trains[:-1])).T
-        Q1, Q2, Q3 = self.trains.quantile(0.25), self.trains.median(), self.trains.quantile(0.75)
-        LL = min(Q1 - 1.5 * (Q3 - Q1), self.trains.min())
-        UL = max(Q3 + 1.5 * (Q3 - Q1), self.trains.max())
-        MF = []
-        for i in self.trains:
-            if i == Q2:
-                MF.append(1)
-            elif i < Q2:
-                MF.append((i - LL) / (Q2 - LL))
-            else:
-                MF.append((UL - i) / (UL - Q2))
-        bg_value = [cum_series.iloc[i - 1] + MF[i] * self.trains.iloc[i] for i in range(1, len(MF))]
-        bg_mat = [-bg_value[i] for i in range(len(bg_value))]
-        bg_mat = np.mat([bg_mat, np.ones(len(bg_mat))]).T
-        beta = np.linalg.inv(bg_mat.T.dot(bg_mat)).dot(bg_mat.T).dot(Y)
-        beta = np.array(beta).reshape(2)
-        const = beta[1] / beta[0]
-        frct = [self.trains.iloc[0]] + [(self.trains.iloc[0] - const) * math.exp(-beta[0] * k) + const
-                                        for k in range(1, len(self.trains) + self.h)]
-        origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-        return pd.Series(origin_prct[-self.h:], self.ahead_idx)
+        """
+        Implements the BGM(1,1) Grey Model with fuzzy membership for time series forecasting.
+        """
+        return self._GM_fuzzy(robust=False)
 
     def RBGM11(self):
-        cum_series = self.trains.cumsum()
-        Y = np.mat(list(self.trains[:-1])).T
-        Q1, Q2, Q3 = self.trains.quantile(0.25), self.trains.median(), self.trains.quantile(0.75)
-        LL = max(Q1 - 1.5 * (Q3 - Q1), self.trains.min())
-        UL = min(Q3 + 1.5 * (Q3 - Q1), self.trains.max())
-        MF = []
-        for i in self.trains:
-            if i <= LL or i >= UL:
-                MF.append(0)
-            elif i == Q2:
-                MF.append(1)
-            elif i < Q2:
-                MF.append((i - LL) / (Q2 - LL))
-            else:
-                MF.append((UL - i) / (UL - Q2))
-        bg_value = [cum_series.iloc[i - 1] + MF[i] * self.trains.iloc[i] for i in range(1, len(MF))]
-        bg_mat = [-bg_value[i] for i in range(len(bg_value))]
-        bg_mat = np.mat([bg_mat, np.ones(len(bg_mat))]).T
-        beta = np.linalg.inv(bg_mat.T.dot(bg_mat)).dot(bg_mat.T).dot(Y)
-        beta = np.array(beta).reshape(2)
-        const = beta[1] / beta[0]
-        frct = [self.trains.iloc[0]] + [(self.trains.iloc[0] - const) * math.exp(-beta[0] * k) + const
-                                        for k in range(1, len(self.trains) + self.h)]
-        origin_prct = [frct[0]] + [frct[i] - frct[i - 1] for i in range(1, len(self.trains) + self.h)]
-        return pd.Series(origin_prct[-self.h:], self.ahead_idx)
+        """
+        Implements the Robust BGM(1,1) Grey Model for time series forecasting.
+        """
+        return self._GM_fuzzy(robust=True)
     # ==================STS: Grey Models==================
 
     # ==================STS: Fuzzy Models==================
     def FTS_Chen(self, m=10):
-        lb, ub = self.trains.min(), self.trains.max()
-        his_data = self.trains.to_list()
-        radius = (ub - lb) / (m * 2)
-        fuzzy_list = [
-            [lb - 1 * radius + 2 * i * radius, lb + 1 * radius + 2 * i * radius, lb + 3 * radius + 2 * i * radius]
-            for i in range(m)]
+        """
+        Implements Chen's Fuzzy Time Series (FTS) forecasting method.
 
+        This method partitions the historical data range into fuzzy sets, fuzzifies the data,
+        constructs fuzzy logical relationships, and generates forecasts based on these relationships.
+
+        Args:
+            m (int, optional): Number of fuzzy sets to partition the data into. Default is 10.
+
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
+        lb, ub = self.trains.min(), self.trains.max()
+        his_data = self.trains.tolist()
+        radius = (ub - lb) / (m * 2)
+        # Define fuzzy sets as triangular membership functions
+        fuzzy_list = [
+            [lb - radius + 2 * i * radius, lb + radius + 2 * i * radius, lb + 3 * radius + 2 * i * radius]
+            for i in range(m)
+        ]
+
+        # Fuzzify the historical data
         location = [-1] * len(his_data)
-        for j in range(len(his_data)):
-            if his_data[j] <= lb:
+        for j, val in enumerate(his_data):
+            if val <= lb:
                 location[j] = 0
-            elif his_data[j] >= ub:
+            elif val >= ub:
                 location[j] = m - 1
             else:
-                for i in range(0, m):
-                    cdf = triang_cdf(his_data[j], fuzzy_list[i])
+                for i in range(m):
+                    cdf = triang_cdf(val, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         location[j] = i
                         break
 
-        fuzzy_dict = {i: [] for i in range(0, m)}
-        for i in range(0, len(his_data) - 1):
+        # Build fuzzy logical relationships
+        fuzzy_dict = {i: [] for i in range(m)}
+        for i in range(len(his_data) - 1):
             fuzzy_dict[location[i]].append(location[i + 1])
 
+        # Forecasting
         frct_result = [his_data[0]]
         for current in range(len(his_data) + self.h - 1):
             if current < len(his_data):
@@ -360,23 +395,23 @@ class ForecastMethods:
             elif vl > ub:
                 belong = m - 1
             else:
-                for i in range(0, m):
+                for i in range(m):
                     cdf = triang_cdf(vl, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         belong = i
                         break
-            possible = len(set(fuzzy_dict[belong]))
+
+            next_states = set(fuzzy_dict[belong])
+            possible = len(next_states)
             if possible == 1:
-                frct = fuzzy_list[(fuzzy_dict[belong][0])][1]
+                frct = fuzzy_list[list(next_states)[0]][1]
             elif possible == 0:
                 frct = fuzzy_list[belong][1]
             else:
-                frct = 0
-                for j in set(fuzzy_dict[belong]):
-                    frct += (fuzzy_list[j][1] / possible)
+                frct = sum(fuzzy_list[j][1] for j in next_states) / possible
             frct_result.append(frct)
 
-        return pd.Series(frct_result[-self.h:], self.ahead_idx)
+        return pd.Series(frct_result[-self.h:], index=self.ahead_idx)
 
     def FTS_My(self, m=10):
         iqr = self.trains.quantile(.75) - self.trains.quantile(.25)
