@@ -38,18 +38,74 @@ def triang_cdf(x, params):
 
 
 class ForecastMethods:
-    # ====================model function====================
-    #  required input: trains (pd.Series) -> training data, h (int) -> forecasting lengths
-    #  output: pd.Series -> forecasting results (length=h)
-    #  some functions may be allowed to adjust their parameters
-    # ====================model function====================
+    """
+    ForecastMethods provides a unified interface for applying multiple time series forecasting methods
+    to a given training dataset.
+
+    This class implements a variety of forecasting techniques,
+    including simple statistical methods, econometric models, grey models, and fuzzy time series models.
+    It is designed to facilitate the comparison and combination of different forecasting approaches.
+
+    Attributes:
+        trains (pd.Series): The training time series data.
+        h (int): The forecast horizon (number of periods to predict).
+        ahead_idx (pd.DatetimeIndex): The index for the forecasted periods.
+
+    Methods:
+        RunAll():
+            Runs all implemented forecasting methods and returns their forecasts in a DataFrame.
+
+        NAIVE():
+            Forecasts using the last observed value (naive method).
+
+        AVG():
+            Forecasts using the mean of the training data.
+
+        SNAIVE(season_length=12, frequency='M', n_job=1):
+            Forecasts using the Seasonal Naive method.
+
+        ARIMA(season_length=12, frequency='M', n_job=1):
+            Forecasts using the AutoARIMA model.
+
+        ETS():
+            Forecasts using the automatic Exponential Smoothing (ETS) model.
+
+        ETS_manual():
+            Forecasts using manually specified ETS models and selects the best based on AICc.
+
+        SES():
+            Forecasts using Simple Exponential Smoothing (SES).
+
+        GM11():
+            Forecasts using the GM(1,1) grey model.
+
+        BGM11():
+            Forecasts using the BGM(1,1) grey model with fuzzy membership.
+
+        RBGM11():
+            Forecasts using the robust BGM(1,1) grey model.
+
+        FTS_Chen(m=10):
+            Forecasts using Chen's Fuzzy Time Series method.
+
+        FTS_My(m=10):
+            Forecasts using a custom Fuzzy Time Series method.
+
+    Notes:
+        - Some methods require external libraries (e.g., StatsForecast, AutoARIMA, AutoETS, ETSModel).
+        - The class is intended for use with univariate time series data.
+        - Forecasts are returned as pandas.Series or pandas.DataFrame indexed by the forecast horizon.
+    """
 
     def __init__(self, trains: pd.Series, h: int = 5):
         self.trains = trains
         self.h = h
         self.ahead_idx = pd.date_range('2022-01-01', periods=h, freq='M')
 
-    def RunAll(self):  # run all forecasting methods, return a dataframe -> shape: (h, num(methods))
+    def RunAll(self) -> pd.DataFrame:
+        '''
+        run all forecasting methods, return a dataframe -> shape: (h, num(methods))
+        '''
         frct_df = pd.DataFrame([], index=self.ahead_idx)
         # simple methods
         frct_df['NAIVE'] = self.NAIVE()
@@ -74,18 +130,30 @@ class ForecastMethods:
         frct_df['EQUAL'] = frct_df.mean(axis=1)
         select_models = ['SNAIVE', 'ARIMA', 'RBGM11', 'FTS_My']
         frct_df['SELECT'] = frct_df[select_models].mean(axis=1)
-        frct_df.replace(0, 1, inplace=True)  # prevent to occur error when calculating error measures
+        # prevent to occur error when calculating error measures
+        frct_df.replace(0, 1, inplace=True)
 
         return frct_df
 
     # ==================simple methods==================
-    def NAIVE(self):
+    def NAIVE(self) -> pd.Series:
         return pd.Series([self.trains.iloc[-1]] * self.h, index=self.ahead_idx)
 
-    def AVG(self):
+    def AVG(self) -> pd.Series:
         return pd.Series([self.trains.mean()] * self.h, index=self.ahead_idx)
 
-    def SNAIVE(self, season_length=12, frequency='M', n_job=1):
+    def SNAIVE(self, season_length: int = 12, frequency: str = 'M', n_job: int = 1) -> pd.Series:
+        """
+        Generates forecasts using the Seasonal Naive (SNAIVE) method.
+
+        Args:
+            season_length (int, optional): The number of periods in a season. Default is 12.
+            frequency (str, optional): The frequency of the time series (e.g., 'M' for monthly). Default is 'M'.
+            n_job (int, optional): The number of parallel jobs to run. Default is 1.
+
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
         train_data = self.trains.copy()
         train_data = pd.DataFrame(train_data).reset_index()
         train_data.columns = ['ds', 'y']
@@ -104,7 +172,18 @@ class ForecastMethods:
     # ==================simple methods==================
 
     # ==================traditional methods==================
-    def ARIMA(self, season_length=12, frequency='M', n_job=1):
+    def ARIMA(self, season_length=12, frequency='M', n_job=1) -> pd.Series:
+        """
+        Fits an AutoARIMA model to the training data and generates forecasts.
+
+        Parameters:
+            season_length (int, optional): The number of periods in a seasonal cycle. Default is 12.
+            frequency (str, optional): The frequency of the time series data (e.g., 'M' for monthly). Default is 'M'.
+            n_job (int, optional): The number of parallel jobs to run. Default is 1.
+
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
         train_data = self.trains.copy()
         train_data = pd.DataFrame(train_data).reset_index()
         train_data.columns = ['ds', 'y']
@@ -122,6 +201,15 @@ class ForecastMethods:
         return prediction
 
     def ETS(self):
+        """
+        Fits an Exponential Smoothing State Space Model (ETS) to the training data and generates forecasts.
+
+        This method attempts to automatically select and fit an ETS model to the training data using the AutoETS class.
+        If the ETS model fitting fails, it falls back to using the average (AVG) method for prediction and logs a message.
+
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
         train_data = self.trains.copy()
         train_data.index = range(0, len(train_data))
         try:
@@ -134,6 +222,16 @@ class ForecastMethods:
         return prdct
 
     def ETS_manual(self):
+        """
+        Fits three different Exponential Smoothing (ETS) models to the training data
+        and selects the best model based on the lowest AICc value.
+        The models fitted are:
+            - Additive error, additive trend, additive seasonal (AAA)
+            - Additive error, additive trend, no seasonal (AAN)
+            - Additive error, no trend, additive seasonal (ANA)
+        Returns:
+            pandas.Series: Forecasted values indexed by the forecast horizon.
+        """
         train_data = self.trains.copy()
         aaa = ETSModel(train_data, error='add', trend='add', seasonal='add', seasonal_periods=12).fit()
         aan = ETSModel(train_data, error='add', trend='add', seasonal=None).fit()
@@ -144,6 +242,9 @@ class ForecastMethods:
         return pred
 
     def SES(self):
+        """
+        Performs Simple Exponential Smoothing (SES) forecasting using an additive error and trend model.
+        """
         train_data = self.trains.copy()
         aan = ETSModel(train_data, error='add', trend='add', seasonal=None).fit()
         pred = aan.forecast(self.h)
@@ -156,7 +257,7 @@ class ForecastMethods:
     def GM11(self):
         cum_series = self.trains.cumsum()
         near_mean = list(((cum_series.shift(-1) + cum_series) / 2)[:-1])
-        Y = np.mat(list(self.trains[:-1])).T
+        Y = np.asmatrix(list(self.trains[:-1])).T
         B = [-near_mean[i] for i in range(len(near_mean))]
         B = np.mat([B, np.ones(len(B))]).T
         beta = np.linalg.inv(B.T.dot(B)).dot(B.T).dot(Y)

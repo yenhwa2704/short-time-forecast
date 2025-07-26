@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from src.forecasting import ForecastMethods
+from src.forecast_method import ForecastMethods
 
 
 if __name__ == "__main__":
