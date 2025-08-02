@@ -1,3 +1,9 @@
+"""
+ForecastMethods class for time series forecasting
+This module provides a unified interface for applying multiple time series forecasting methods
+to a given training dataset. In addition to methods for naive forecasting, statistical models and econometric models,
+grey models and fuzzy time series models are also implemented to deal with short-term forecasting tasks.
+"""
 import os
 import math
 import json
@@ -5,36 +11,10 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
 from statsforecast import StatsForecast
 from statsforecast.models import SeasonalNaive, AutoARIMA
 from sktime.forecasting.ets import AutoETS
-
-# from hts.hierarchy import HierarchyTree
 from statsmodels.tsa.exponential_smoothing.ets import ETSModel
-
-
-def triang_cdf(x, params):
-    """
-    Compute the cumulative distribution function (CDF) of a triangular distribution.
-
-    Parameters:
-        x (float): The value at which to evaluate the CDF.
-        params (list or tuple): The parameters of the triangular distribution (a, c, b),
-                                where a is the lower limit, c is the mode, and b is the upper limit.
-
-    Returns:
-        float: The CDF value at x.
-    """
-    a, c, b = params
-    if x < a:
-        return 0.0
-    elif a <= x < c:
-        return ((x - a) ** 2) / ((b - a) * (c - a))
-    elif c <= x <= b:
-        return 1.0 - ((b - x) ** 2) / ((b - a) * (b - c))
-    else:
-        return 1.0
 
 
 class ForecastMethods:
@@ -97,10 +77,36 @@ class ForecastMethods:
         - Forecasts are returned as pandas.Series or pandas.DataFrame indexed by the forecast horizon.
     """
 
-    def __init__(self, trains: pd.Series, h: int = 5):
+    def __init__(self, trains: pd.Series, h: int = 5, frequency: str = 'ME'):
         self.trains = trains
         self.h = h
-        self.ahead_idx = pd.date_range('2022-01-01', periods=h, freq='M')
+        self.frequency = frequency
+        self.forecast_dtime = pd.to_datetime(trains.index[-1]) + pd.DateOffset(months=1)
+        self.ahead_idx = pd.date_range(self.forecast_dtime, periods=h, freq=frequency)
+
+    @staticmethod
+    def triang_cdf(x, params):
+        """
+        Compute the cumulative distribution function (CDF) of a triangular distribution.
+
+        Parameters:
+            x (float): The value at which to evaluate the CDF.
+            params (list or tuple): The parameters of the triangular distribution (a, c, b),
+                                    where a is the lower limit, c is the mode, and b is the upper limit.
+
+        Returns:
+            float: The CDF value at x.
+        """
+        a, c, b = params
+        if x < a:
+            return 0.0
+        elif a <= x < c:
+            return ((x - a) ** 2) / ((b - a) * (c - a))
+        elif c <= x <= b:
+            return 1.0 - ((b - x) ** 2) / ((b - a) * (b - c))
+        else:
+            warnings.warn("Value out of bounds for triangular distribution CDF.")
+            return 1.0
 
     def RunAll(self) -> pd.DataFrame:
         '''
@@ -195,8 +201,14 @@ class ForecastMethods:
             freq=frequency,
             n_jobs=n_job
         )
-        prediction = fcst.forecast(df=train_data, h=self.h)
-        prediction = prediction.set_index('ds')['AutoARIMA']
+        try:
+            prediction = fcst.forecast(df=train_data, h=self.h)
+            prediction = prediction.set_index('ds')['AutoARIMA']
+        except Exception as e:
+            warnings.warn(f"ARIMA model fitting failed: {e}, using AVG instead.")
+            prediction = self.AVG()
+            prediction = prediction.to_frame(name='AutoARIMA')
+        
         prediction.index = self.ahead_idx
         return prediction
 
@@ -371,7 +383,7 @@ class ForecastMethods:
                 location[j] = m - 1
             else:
                 for i in range(m):
-                    cdf = triang_cdf(val, fuzzy_list[i])
+                    cdf = self.triang_cdf(val, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         location[j] = i
                         break
@@ -396,7 +408,7 @@ class ForecastMethods:
                 belong = m - 1
             else:
                 for i in range(m):
-                    cdf = triang_cdf(vl, fuzzy_list[i])
+                    cdf = self.triang_cdf(vl, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         belong = i
                         break
@@ -431,7 +443,7 @@ class ForecastMethods:
                 location[j] = m - 1
             else:
                 for i in range(0, m):
-                    cdf = triang_cdf(his_data[j], fuzzy_list[i])
+                    cdf = self.triang_cdf(his_data[j], fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         location[j] = i
                         break
@@ -454,7 +466,7 @@ class ForecastMethods:
                 belong = m - 1
             else:
                 for i in range(0, m):
-                    cdf = triang_cdf(vl, fuzzy_list[i])
+                    cdf = self.triang_cdf(vl, fuzzy_list[i])
                     if 0.125 <= cdf <= 0.875:
                         belong = i
                         break
