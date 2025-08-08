@@ -10,7 +10,6 @@ import json
 import warnings
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from statsforecast import StatsForecast
 from statsforecast.models import SeasonalNaive, AutoARIMA
 from sktime.forecasting.ets import AutoETS
@@ -483,4 +482,3 @@ class ForecastMethods:
 
         return pd.Series(frct_result[-self.h:], self.ahead_idx)
     # ==================STS: Fuzzy Models==================
-
