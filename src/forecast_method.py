@@ -482,3 +482,26 @@ class ForecastMethods:
 
         return pd.Series(frct_result[-self.h:], self.ahead_idx)
     # ==================STS: Fuzzy Models==================
+
+# add a function to measure the error of the forecast: MAPE, MAE, MSE, RMSE
+def measure_error(forecast: pd.Series, actual: pd.Series) -> dict:
+    """
+    Measure the error of the forecast against actual values.
+
+    Args:
+        forecast (pd.Series): Forecasted values.
+        actual (pd.Series): Actual observed values.
+
+    Returns:
+        dict: A dictionary containing various error metrics.
+    """
+    if len(forecast) != len(actual):
+        raise ValueError("Forecast and actual series must have the same length.")
+
+    errors = {
+        'MAE': np.mean(np.abs(forecast - actual)),
+        'MSE': np.mean((forecast - actual) ** 2),
+        'RMSE': np.sqrt(np.mean((forecast - actual) ** 2)),
+        'MAPE': np.mean(np.abs((forecast - actual) / actual)) * 100
+    }
+    return errors
