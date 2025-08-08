@@ -4,9 +4,7 @@ This module provides a unified interface for applying multiple time series forec
 to a given training dataset. In addition to methods for naive forecasting, statistical models and econometric models,
 grey models and fuzzy time series models are also implemented to deal with short-term forecasting tasks.
 """
-import os
 import math
-import json
 import warnings
 import numpy as np
 import pandas as pd
@@ -207,7 +205,7 @@ class ForecastMethods:
             warnings.warn(f"ARIMA model fitting failed: {e}, using AVG instead.")
             prediction = self.AVG()
             prediction = prediction.to_frame(name='AutoARIMA')
-        
+
         prediction.index = self.ahead_idx
         return prediction
 
@@ -482,6 +480,7 @@ class ForecastMethods:
 
         return pd.Series(frct_result[-self.h:], self.ahead_idx)
     # ==================STS: Fuzzy Models==================
+
 
 # add a function to measure the error of the forecast: MAPE, MAE, MSE, RMSE
 def measure_error(forecast: pd.Series, actual: pd.Series) -> dict:
